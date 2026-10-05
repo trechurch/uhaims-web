@@ -8,11 +8,14 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface Item {
-  id: number
-  name: string
-  unit: string
-  category?: string
-  par_level?: number
+  key: string           // primary identifier (also used as display name)
+  description: string   // human-readable item name
+  pack_type?: string    // e.g. "6/24/.5 oz"
+  per?: string          // e.g. "Case"
+  gl_name?: string      // category, e.g. "Dairy"
+  cost?: number
+  cost_center?: string
+  record_status?: string
 }
 
 export interface PullSheet {
@@ -28,7 +31,7 @@ export interface PullSheet {
 export interface PullSheetItem {
   id: number
   pull_sheet_id: number
-  item_id: number
+  item_key: string
   quantity_requested: number
   quantity_fulfilled?: number
   notes?: string

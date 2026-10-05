@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
-import { supabase, type Item, type PullSheet, type PullSheetItem } from '@/lib/supabase'
+import { supabase, type Item, type PullSheet } from '@/lib/supabase'
 
 const COST_CENTERS = [
   'All Locations',
@@ -25,7 +25,7 @@ export default function PullSheetsPage() {
   const [activePulls, setActivePulls] = useState<PullSheet[]>([])
   const [loading, setLoading] = useState(false)
 
-  // ── New Pull Sheet state ───────────────────────────────────────────────────
+  // New Pull state
   const [search, setSearch] = useState('')
   const [searchResults, setSearchResults] = useState<Item[]>([])
   const [draft, setDraft] = useState<DraftLine[]>([])
@@ -34,15 +34,11 @@ export default function PullSheetsPage() {
   const [submitting, setSubmitting] = useState(false)
   const [submitMsg, setSubmitMsg] = useState('')
 
-  // ── Load active pull sheets ────────────────────────────────────────────────
+  // Load active pull sheets
   useEffect(() => {
     const fetchActive = async () => {
       setLoading(true)
-      let q = supabase
-        .from('pull_sheets')
-        .select('*')
-        .eq('status', 'open')
-        .order('created_at', { ascending: false })
+      let q = supabase.from('pull_sheets').select('*').eq('status','open').order('created_at',{ascending:false})
       if (costCenter !== 'All Locations') q = q.eq('cost_center', costCenter)
       const { data } = await q
       setActivePulls(data ?? [])
@@ -51,56 +47,57 @@ export default function PullSheetsPage() {
     fetchActive()
   }, [costCenter])
 
-  // ── Live item search ───────────────────────────────────────────────────────
+  // Live search — searches `description` column
   const handleSearch = useCallback(async (val: string) => {
     setSearch(val)
     if (val.trim().length < 2) { setSearchResults([]); return }
     const { data } = await supabase
       .from('items')
-      .select('id, name, unit, category')
-      .ilike('name', `%${val}%`)
+      .select('key, description, pack_type, per, gl_name, cost_center')
+      .ilike('description', `%${val}%`)
+      .eq('record_status', 'active')
       .limit(12)
     setSearchResults(data ?? [])
   }, [])
 
-  // ── Draft helpers ──────────────────────────────────────────────────────────
+  // Draft helpers
   const addItem = (item: Item) => {
     setDraft((prev) => {
-      const existing = prev.find((l) => l.item.id === item.id)
-      if (existing) return prev.map((l) => l.item.id === item.id ? { ...l, qty: l.qty + 1 } : l)
+      const exists = prev.find((l) => l.item.key === item.key)
+      if (exists) return prev.map((l) => l.item.key === item.key ? { ...l, qty: l.qty + 1 } : l)
       return [...prev, { item, qty: 1 }]
     })
     setSearch('')
     setSearchResults([])
   }
 
-  const updateQty = (id: number, delta: number) => {
-    setDraft((prev) =>
-      prev.map((l) => l.item.id === id ? { ...l, qty: Math.max(1, l.qty + delta) } : l)
-    )
-  }
+  const updateQty = (key: string, delta: number) =>
+    setDraft((prev) => prev.map((l) => l.item.key === key ? { ...l, qty: Math.max(1, l.qty + delta) } : l))
 
-  const removeLine = (id: number) => setDraft((prev) => prev.filter((l) => l.item.id !== id))
+  const removeLine = (key: string) => setDraft((prev) => prev.filter((l) => l.item.key !== key))
 
-  // ── Submit pull sheet ──────────────────────────────────────────────────────
+  // Submit pull sheet
   const submitPull = async () => {
     if (!draft.length) return
     setSubmitting(true)
     setSubmitMsg('')
+    const cc = costCenter === 'All Locations' ? 'General' : costCenter
     const { data: ps, error } = await supabase
       .from('pull_sheets')
-      .insert({ cost_center: costCenter === 'All Locations' ? 'General' : costCenter,
-                event_name: eventName || null, event_date: eventDate || null, status: 'open' })
+      .insert({ cost_center: cc, event_name: eventName || null, event_date: eventDate || null, status: 'open' })
       .select('id').single()
-    if (error || !ps) { setSubmitMsg('❌ Error creating pull sheet. Check Supabase connection.'); setSubmitting(false); return }
-    const lines = draft.map((l) => ({ pull_sheet_id: ps.id, item_id: l.item.id, quantity_requested: l.qty }))
+    if (error || !ps) {
+      setSubmitMsg('❌ Error: ' + (error?.message ?? 'Unknown'))
+      setSubmitting(false)
+      return
+    }
+    const lines = draft.map((l) => ({ pull_sheet_id: ps.id, item_key: l.item.key, quantity_requested: l.qty }))
     await supabase.from('pull_sheet_items').insert(lines)
     setDraft([])
     setEventName('')
     setEventDate('')
     setSubmitMsg(`✅ Pull sheet #${ps.id} submitted!`)
     setSubmitting(false)
-    // Refresh active list
     const { data } = await supabase.from('pull_sheets').select('*').eq('status','open').order('created_at',{ascending:false})
     setActivePulls(data ?? [])
   }
@@ -108,7 +105,6 @@ export default function PullSheetsPage() {
   return (
     <main className="min-h-screen bg-gray-950 text-white">
       <div className="max-w-2xl mx-auto px-4 py-6">
-
         {/* Header */}
         <div className="flex items-center gap-3 mb-5">
           <Link href="/" className="text-gray-400 hover:text-white text-2xl">←</Link>
@@ -118,30 +114,24 @@ export default function PullSheetsPage() {
           </div>
         </div>
 
-        {/* Cost Center Selector */}
-        <select
-          value={costCenter}
-          onChange={(e) => setCostCenter(e.target.value)}
-          className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white mb-5 text-sm"
-        >
+        {/* Cost Center */}
+        <select value={costCenter} onChange={(e) => setCostCenter(e.target.value)}
+          className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white mb-5 text-sm">
           {COST_CENTERS.map((cc) => <option key={cc}>{cc}</option>)}
         </select>
 
         {/* Tabs */}
         <div className="flex gap-1 bg-gray-900 rounded-xl p-1 mb-6">
           {(['active','new','templates'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
+            <button key={t} onClick={() => setTab(t)}
               className={`flex-1 py-2 rounded-lg text-sm font-medium capitalize transition-all
-                ${tab === t ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}
-            >
+                ${tab === t ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'}`}>
               {t === 'new' ? '+ New Pull' : t === 'active' ? 'Active' : 'Templates'}
             </button>
           ))}
         </div>
 
-        {/* ── ACTIVE TAB ── */}
+        {/* ACTIVE TAB */}
         {tab === 'active' && (
           <div>
             {loading && <p className="text-gray-500 text-sm">Loading…</p>}
@@ -164,21 +154,18 @@ export default function PullSheetsPage() {
                       <div className="text-sm text-gray-400 mt-1">{ps.cost_center}</div>
                       {ps.event_date && <div className="text-xs text-gray-500 mt-1">📅 {ps.event_date}</div>}
                     </div>
-                    <span className="bg-blue-900 text-blue-300 text-xs px-2 py-1 rounded-lg capitalize">{ps.status}</span>
+                    <span className="bg-blue-900 text-blue-300 text-xs px-2 py-1 rounded-lg">{ps.status}</span>
                   </div>
-                  <div className="text-xs text-gray-600 mt-2">
-                    {new Date(ps.created_at).toLocaleString()}
-                  </div>
+                  <div className="text-xs text-gray-600 mt-2">{new Date(ps.created_at).toLocaleString()}</div>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* ── NEW PULL TAB ── */}
+        {/* NEW PULL TAB */}
         {tab === 'new' && (
           <div>
-            {/* Event info */}
             <div className="space-y-3 mb-5">
               <input value={eventName} onChange={(e) => setEventName(e.target.value)}
                 placeholder="Event name (optional)"
@@ -189,50 +176,46 @@ export default function PullSheetsPage() {
 
             {/* Live search */}
             <div className="relative mb-2">
-              <input
-                value={search}
-                onChange={(e) => handleSearch(e.target.value)}
+              <input value={search} onChange={(e) => handleSearch(e.target.value)}
                 placeholder="🔍 Type to search items…"
-                className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm text-white placeholder-gray-500"
-              />
+                className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-sm text-white placeholder-gray-500" />
               {searchResults.length > 0 && (
                 <div className="absolute z-10 w-full bg-gray-800 border border-gray-700 rounded-xl mt-1 max-h-64 overflow-y-auto shadow-2xl">
                   {searchResults.map((item) => (
-                    <button key={item.id} onClick={() => addItem(item)}
+                    <button key={item.key} onClick={() => addItem(item)}
                       className="w-full text-left px-4 py-3 hover:bg-gray-700 border-b border-gray-700 last:border-b-0">
-                      <div className="font-medium text-sm">{item.name}</div>
-                      <div className="text-xs text-gray-400">{item.unit} · {item.category ?? '—'}</div>
+                      <div className="font-medium text-sm">{item.description}</div>
+                      <div className="text-xs text-gray-400">{item.pack_type ?? item.per ?? '—'} · {item.gl_name ?? '—'}</div>
                     </button>
                   ))}
                 </div>
               )}
             </div>
 
-            {/* Draft lines */}
+            {/* Draft list */}
             {draft.length > 0 && (
               <div className="mt-4 space-y-2">
-                <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Pull List</div>
+                <div className="text-xs text-gray-500 uppercase tracking-wide mb-2">Pull List ({draft.length} item{draft.length !== 1 ? 's' : ''})</div>
                 {draft.map((line) => (
-                  <div key={line.item.id} className="bg-gray-900 rounded-xl px-4 py-3 flex items-center gap-3 border border-gray-800">
+                  <div key={line.item.key} className="bg-gray-900 rounded-xl px-4 py-3 flex items-center gap-3 border border-gray-800">
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium text-sm truncate">{line.item.name}</div>
-                      <div className="text-xs text-gray-400">{line.item.unit}</div>
+                      <div className="font-medium text-sm truncate">{line.item.description}</div>
+                      <div className="text-xs text-gray-400">{line.item.pack_type ?? line.item.per ?? '—'}</div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <button onClick={() => updateQty(line.item.id, -1)}
-                        className="w-8 h-8 bg-gray-700 hover:bg-gray-600 rounded-lg text-lg font-bold leading-none flex items-center justify-center">−</button>
-                      <span className="w-8 text-center font-semibold">{line.qty}</span>
-                      <button onClick={() => updateQty(line.item.id, 1)}
-                        className="w-8 h-8 bg-gray-700 hover:bg-gray-600 rounded-lg text-lg font-bold leading-none flex items-center justify-center">+</button>
-                      <button onClick={() => removeLine(line.item.id)}
-                        className="w-8 h-8 bg-red-900/50 hover:bg-red-800 rounded-lg text-sm flex items-center justify-center">✕</button>
+                      <button onClick={() => updateQty(line.item.key, -1)}
+                        className="w-9 h-9 bg-gray-700 hover:bg-gray-600 rounded-lg text-xl font-bold flex items-center justify-center">−</button>
+                      <span className="w-8 text-center font-semibold text-lg">{line.qty}</span>
+                      <button onClick={() => updateQty(line.item.key, 1)}
+                        className="w-9 h-9 bg-gray-700 hover:bg-gray-600 rounded-lg text-xl font-bold flex items-center justify-center">+</button>
+                      <button onClick={() => removeLine(line.item.key)}
+                        className="w-9 h-9 bg-red-900/50 hover:bg-red-800 rounded-lg text-sm flex items-center justify-center">✕</button>
                     </div>
                   </div>
                 ))}
               </div>
             )}
 
-            {/* Submit */}
             {draft.length > 0 && (
               <div className="mt-6">
                 {submitMsg && <p className="text-sm mb-3 text-center">{submitMsg}</p>}
@@ -242,21 +225,19 @@ export default function PullSheetsPage() {
                 </button>
               </div>
             )}
-
             {draft.length === 0 && !search && (
               <p className="text-center text-gray-600 text-sm mt-8">Search for items above to build your pull list</p>
             )}
           </div>
         )}
 
-        {/* ── TEMPLATES TAB ── */}
+        {/* TEMPLATES TAB */}
         {tab === 'templates' && (
           <div className="text-center py-16">
             <div className="text-5xl mb-3">🗂️</div>
             <p className="text-gray-400">Templates coming soon</p>
           </div>
         )}
-
       </div>
     </main>
   )
